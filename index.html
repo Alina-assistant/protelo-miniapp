@@ -258,6 +258,14 @@ button:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--wine); o
   line-height:1.42;
 }
 .reading { scrollbar-gutter:stable; padding:0 2px }
+/* Only the two intermediate rewards replace the artwork, not the dialogue. */
+.memory-result .scene { flex:0 0 auto; min-height:0; background:none }
+.memory-card { width:100%; min-width:0 }
+.memory-card:focus-visible { outline-color:var(--gold); outline-offset:-3px }
+.memory-result .panel { flex:1 1 auto }
+.memory-result .reading { flex:1 1 auto; max-height:none; block-size:auto }
+.image-pending,.image-failed { background:var(--paper-2); color:var(--ink) }
+.artwork:has(.image-pending,.image-failed) :is(.box-label,.envelope-list) { visibility:hidden }
 @media (max-height:720px) {
   .reading { max-height:7lh }
   .decision-panel .reading { max-height:none; scrollbar-gutter:auto }
@@ -2881,16 +2889,16 @@ button:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--wine); o
     "continueButton": "Продолжить"
   },
   "assets": {
-    "critic": "Материалы_полной_игры/Изображения/Внутренний_критик.png",
-    "fatigue": "Материалы_полной_игры/Изображения/Усталость.png",
-    "boredom": "Материалы_полной_игры/Изображения/Скука.png",
-    "loneliness": "Материалы_полной_игры/Изображения/Одиночество.png",
-    "chores_open": "Материалы_полной_игры/Изображения/Открытый_нынешний_конверт.png",
-    "boxes_overview": "Материалы_полной_игры/Изображения/Три_коробки.png",
-    "original_found": "Материалы_полной_игры/Изображения/Оригинал_в_коробке_3.png",
-    "painting": "Материалы_полной_игры/Изображения/Финал_рисунок.png",
-    "tea": "Материалы_полной_игры/Изображения/Финал_встреча.png",
-    "walk": "Материалы_полной_игры/Изображения/Финал_прогулка.png"
+    "critic": "Материалы_полной_игры/Изображения/Внутренний_критик.webp",
+    "fatigue": "Материалы_полной_игры/Изображения/Усталость.webp",
+    "boredom": "Материалы_полной_игры/Изображения/Скука.webp",
+    "loneliness": "Материалы_полной_игры/Изображения/Одиночество.webp",
+    "chores_open": "Материалы_полной_игры/Изображения/Открытый_нынешний_конверт.webp",
+    "boxes_overview": "Материалы_полной_игры/Изображения/Три_коробки.webp",
+    "original_found": "Материалы_полной_игры/Изображения/Оригинал_в_коробке_3.webp",
+    "painting": "Материалы_полной_игры/Изображения/Финал_рисунок.webp",
+    "tea": "Материалы_полной_игры/Изображения/Финал_встреча.webp",
+    "walk": "Материалы_полной_игры/Изображения/Финал_прогулка.webp"
   },
   "boxPositions": {
     "left": {
@@ -3102,6 +3110,7 @@ function closeSheet(){
   sheetMode = '';
   sheet.close();
   sheetContent.replaceChildren();
+  pruneImageObservers();
   sheetTrigger?.focus({preventScroll:true});
   sheetTrigger = null;
 }
@@ -3116,6 +3125,7 @@ function openPreview(title, content, trigger=null, archiveId=null){
   sheetTitle.textContent = title || 'Просмотр';
   sheetContent.innerHTML = content;
   showSheet();
+  deliverImages(sheetContent);
 }
 function renderArchiveSheet(){
   sheetMode = 'archive';
@@ -3124,6 +3134,7 @@ function renderArchiveSheet(){
   sheetContent.innerHTML = renderArchiveList(buildArchiveItems());
   showSheet();
   bindMaterialButtons(sheetContent);
+  deliverImages(sheetContent);
 }
 function buildArchiveItems(ids){
   return data.archive.filter(item => hasGrant(item.flag) && (!ids || ids.includes(item.doc)));
@@ -3132,7 +3143,7 @@ function renderArchiveList(items){
   if (!items.length) return '<p class="paper-document">Пока здесь пусто. Находки появятся после осмотра.</p>';
   return `<div class="archive-grid">${items.map(({doc:id,label})=>{
     const {art}=data.materials[id];
-    const preview = art ? `<img class="archive-preview" src="${escapeHtml(assetSource(art))}" alt="">` : '<span class="archive-preview paper-preview" aria-hidden="true"></span>';
+    const preview = art ? imageMarkup(assetSource(art),'','archive-preview',true) : '<span class="archive-preview paper-preview" aria-hidden="true"></span>';
     return `<button class="archive-entry" data-material="${escapeHtml(id)}">${preview}<span>${escapeHtml(label)}</span></button>`;
   }).join('')}</div>`;
 }
@@ -3144,6 +3155,180 @@ function bindMaterialButtons(root){
   });
 }
 function assetSource(key){ return data.assets?.[key] || EMBED_ASSETS[key]; }
+function isMemoryResult(node){
+  return (node.id==='с1-итог' && node.card==='memory1') || (node.id==='с2-итог' && node.card==='memory2');
+}
+// One request/decode promise per URL; keep at most three settled warm Images.
+// Dropping a warm Image does not forget its URL or start another prefetch.
+const imageDelivery = new Map();
+let imageEpoch = 0, imageIdle = null;
+function imagePlaceholder(failed=false){
+  const label = failed ? 'Изображение недоступно' : 'Загрузка изображения…';
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480"><rect width="640" height="480" fill="#ede0ce"/><text x="320" y="240" text-anchor="middle" fill="#67343a" font-family="sans-serif" font-size="24">${label}</text></svg>`);
+}
+function imageMarkup(source,alt,className='',lazy=false){
+  return `<img class="${className} image-pending" src="${imagePlaceholder()}" data-image-source="${escapeHtml(source)}" ${lazy?'data-image-lazy':''} alt="${escapeHtml(alt)}" aria-busy="true" decoding="async">`;
+}
+function trimWarmImages(){
+  const warm = [...imageDelivery.values()].filter(entry=>entry.image && entry.status!=='loading');
+  warm.sort((a,b)=>b.used-a.used).slice(3).forEach(entry=>{ entry.image=null; });
+}
+let imageUse = 0;
+function requestImage(source,priority='high'){
+  let entry = imageDelivery.get(source);
+  // A failed request is not a permanent cache entry: revisit can retry.
+  if (entry?.status==='failed') { imageDelivery.delete(source); entry=null; }
+  if (entry) {
+    entry.used=++imageUse;
+    if (entry.image && priority==='high') entry.image.fetchPriority='high';
+    return entry;
+  }
+  const image = new Image();
+  entry={image,status:'loading',decoded:false,decodePromise:null,used:++imageUse};
+  imageDelivery.set(source,entry);
+  image.decoding='async';
+  image.fetchPriority=priority;
+  entry.ready=new Promise(resolve=>{
+    image.onload=()=>{ image.onload=image.onerror=null; entry.status='loaded'; resolve(true); trimWarmImages(); };
+    image.onerror=()=>{ image.onload=image.onerror=null; entry.status='failed'; resolve(false); trimWarmImages(); };
+    image.src=source;
+  });
+  return entry;
+}
+function decodeImage(entry){
+  if (entry.decodePromise) return entry.decodePromise;
+  entry.decodePromise=entry.ready.then(async loaded=>{
+    if (!loaded) return false;
+    const image=entry.image;
+    // An evicted warm image is left to the browser's normal display decoder.
+    if (image && image.decode) { try { await image.decode(); } catch {} }
+    entry.decoded=true;
+    return true;
+  });
+  return entry.decodePromise;
+}
+const lazyImages = new Set(), lazyImageQueue = [];
+let lazyImageBusy=false, imageSpeculation=Promise.resolve();
+const imageObserver = typeof IntersectionObserver==='function' ? new IntersectionObserver(entries=>{
+  for (const entry of entries) if (entry.isIntersecting) {
+    imageObserver.unobserve(entry.target);
+    lazyImages.delete(entry.target);
+    lazyImageQueue.push(entry.target);
+  }
+  drainLazyImages();
+}) : null;
+function pruneImageObservers(){
+  for (const image of lazyImages) if (!image.isConnected) {
+    imageObserver?.unobserve(image);
+    lazyImages.delete(image);
+  }
+}
+async function deliverImage(image){
+  if (!image.isConnected) return;
+  const source=image.dataset.imageSource;
+  const loaded=source && await decodeImage(requestImage(source));
+  // Detached scenes must never receive a late image from another scene.
+  if (!image.isConnected || image.dataset.imageSource!==source) return;
+  const fail=()=>{
+    image.onerror=null;
+    image.src=imagePlaceholder(true);
+    image.classList.remove('image-pending');
+    image.classList.add('image-failed');
+    image.removeAttribute('aria-busy');
+    image.alt=`Изображение недоступно: ${image.alt}`;
+  };
+  if (!loaded) { fail(); return; }
+  image.onerror=fail;
+  image.src=source;
+  image.classList.remove('image-pending');
+  image.removeAttribute('aria-busy');
+}
+async function drainLazyImages(){
+  if (lazyImageBusy) return;
+  lazyImageBusy=true;
+  try {
+    while (lazyImageQueue.length) await deliverImage(lazyImageQueue.shift());
+  } finally { lazyImageBusy=false; }
+}
+function deliverImages(root){
+  pruneImageObservers();
+  const eager=[];
+  for (const image of root.querySelectorAll('img[data-image-source]')) {
+    if (image.hasAttribute('data-image-lazy')) {
+      if (imageObserver) {
+        lazyImages.add(image);
+        imageObserver.observe(image);
+      } else {
+        // Older WebViews still load archive thumbnails serially, not in a burst.
+        lazyImageQueue.push(image);
+      }
+    } else eager.push(deliverImage(image));
+  }
+  if (!imageObserver) drainLazyImages();
+  return Promise.all(eager);
+}
+function sceneImageKeys(node){
+  if (!node || isMemoryResult(node) || node.kind==='archive' || node.cards || node.paperPair) return [];
+  if (node.photoPair) return node.photoPair.map(id=>data.materials[id]?.art).filter(Boolean);
+  const material=data.materials[node.material];
+  if (material && !material.art) return [];
+  return [material?.art || node.art || 'chief'];
+}
+function upcomingImages(nodes){
+  const queue=nodes.filter(Boolean).map(node=>({node,depth:0})), visited=new Set(), sources=[];
+  // Breadth-first, bounded lookahead; no state/grant mutation or auto-transition.
+  while (queue.length && visited.size<24 && sources.length<2) {
+    const {node,depth}=queue.shift();
+    if (visited.has(node.id)) continue;
+    visited.add(node.id);
+    if (!node.hidden && node.kind!=='dispatch') {
+      for (const key of sceneImageKeys(node)) {
+        const source=assetSource(key);
+        if (source && !imageDelivery.has(source) && !sources.includes(source)) sources.push(source);
+        if (sources.length===2) break;
+      }
+    }
+    if (depth<4) for (const edge of node.edges||[]) {
+      const next=getNode(edge.to);
+      if (next && next.kind!=='archive' && !visited.has(next.id)) queue.push({node:next,depth:depth+1});
+    }
+  }
+  return sources;
+}
+function beginImageDelivery(nextNodes){
+  const epoch=++imageEpoch;
+  if (imageIdle!==null) {
+    if (window.cancelIdleCallback) window.cancelIdleCallback(imageIdle); else clearTimeout(imageIdle);
+    imageIdle=null;
+  }
+  // Rendering and all action handlers are already live; never await this in render.
+  deliverImages(app).then(()=>{
+    if (epoch!==imageEpoch) return;
+    const connection=navigator.connection;
+    if (connection?.saveData || /(^|-)2g$/.test(connection?.effectiveType||'')) return;
+    const run=()=>{
+      imageIdle=null;
+      // Also serialize across renders: an old in-flight prefetch may finish,
+      // but cannot start its next request or race a new speculative batch.
+      imageSpeculation=imageSpeculation.then(async()=>{
+        if (epoch!==imageEpoch || document.hidden) return;
+        const sources=upcomingImages(nextNodes);
+        for (const [index,source] of sources.entries()) {
+          if (epoch!==imageEpoch || document.hidden) break;
+          const entry=requestImage(source,'low');
+          await entry.ready;
+          if (epoch!==imageEpoch) break;
+          if (index===0) await decodeImage(entry);
+          trimWarmImages();
+        }
+      });
+    };
+    imageIdle=window.requestIdleCallback ? window.requestIdleCallback(run,{timeout:1500}) : setTimeout(run,200);
+  });
+}
+document.addEventListener('visibilitychange',()=>{
+  if (!document.hidden && data) beginImageDelivery([getNode(state.current || data.entry)]);
+});
 function getSceneAsset(node){
   return assetSource(node.art || 'chief');
 }
@@ -3156,8 +3341,9 @@ function renderHome(){
   const cover = data.nodes[data.entry];
   const continuing = state.current && state.current !== data.entry;
   const label = continuing ? data.ui?.continueButton || 'Продолжить' : data.ui?.homeButton || cover.edges[0].label;
-  app.innerHTML = `${renderTopbar(false)}<main class="screen"><div class="hero-card"><div class="scene"><img class="scene-img" src="${getSceneAsset(cover)}" alt="Обложка"></div><div class="panel cover-panel"><h1>${escapeHtml(data.title)}</h1><p>${escapeHtml(cover.text)}</p><div class="actions"><button class="main-btn" data-action="start">${escapeHtml(label)}</button><button class="text-btn" data-action="reset">Сбросить прогресс</button></div></div></div></main>`;
+  app.innerHTML = `${renderTopbar(false)}<main class="screen"><div class="hero-card"><div class="scene">${imageMarkup(getSceneAsset(cover),'Обложка','scene-img')}</div><div class="panel cover-panel"><h1>${escapeHtml(data.title)}</h1><p>${escapeHtml(cover.text)}</p><div class="actions"><button class="main-btn" data-action="start">${escapeHtml(label)}</button><button class="text-btn" data-action="reset">Сбросить прогресс</button></div></div></div></main>`;
   bindCommonActions();
+  beginImageDelivery([getNode(continuing ? state.current : cover.edges[0].to)]);
 }
 function resolveNode(){
   const seen=new Set();let node=getNode(state.current);
@@ -3182,7 +3368,7 @@ function renderArtwork(key,alt){
     label = `<span class="box-label label-found">№${box.number} «${escapeHtml(box.label)}»</span>`;
   }
   if (key === 'chores_open') label = `<span class="envelope-list" aria-hidden="true">${escapeHtml(data.materials.chores.text)}</span>`;
-  const image = `<img src="${escapeHtml(assetSource(key))}" alt="${escapeHtml(alt)}">`;
+  const image = imageMarkup(assetSource(key),alt);
   if (key === 'boxes_overview') return `<figure class="artwork boxes-artwork"><div class="boxes-artwork-surface">${image}${label}</div></figure>`;
   return `<figure class="artwork">${image}${label}</figure>`;
 }
@@ -3202,7 +3388,7 @@ function renderPaper(id, includeArt=false){
   const {title,text,art,sketch}=data.materials[id];
   if (sketch) return renderSketch();
   const visual = includeArt && art ? (isComposite(art) ? renderArtwork(art,title)
-    : `<img class="modal-img" src="${escapeHtml(assetSource(art))}" alt="${escapeHtml(title)}">`) : '';
+    : imageMarkup(assetSource(art),title,'modal-img')) : '';
   return `<article class="paper-document"><h3>${escapeHtml(title)}</h3>${visual}${text ? `<p>${escapeHtml(text)}</p>` : ''}</article>`;
 }
 function renderMaterialViews(ids){ return `<div class="view-stack">${ids.map(id=>renderPaper(id,true)).join('')}</div>`; }
@@ -3211,7 +3397,7 @@ function renderPhotoPair(ids){
   return `<div class="photo-pair">${ids.map(id=>{
     const {title,art}=data.materials[id];
     const image=isComposite(art) ? renderArtwork(art,title)
-      : `<img class="scene-img" src="${escapeHtml(assetSource(art))}" alt="${escapeHtml(title)}">`;
+      : imageMarkup(assetSource(art),title,'scene-img');
     return `<div class="photo-item"><div class="photo-visual">${image}</div><p class="photo-caption">${escapeHtml(title)}</p></div>`;
   }).join('')}</div>`;
 }
@@ -3236,12 +3422,13 @@ function renderNode(){
   const textAlongsideArt = material?.art ? `<p class="note-text">${escapeHtml(material.text).replaceAll('\n','<br>')}</p>` : '';
   const doc = node.id === 'с1-фрагмент' ? `<p class="note-text">${escapeHtml(data.documents.fragment)}</p>` : textAlongsideArt;
   const question = node.question ? `<p class="note-text">${escapeHtml(node.question)}</p>` : '';
-  const card = node.card ? renderPaper(node.card) : '';
+  const memoryResult = isMemoryResult(node);
+  const card = node.card && !memoryResult ? renderPaper(node.card) : '';
   const reading = bubble || doc || question || card ? `<div class="reading" role="region" aria-label="Текст сцены" tabindex="0">${question}${bubble}${doc}${card}</div>` : '';
   const edges = (node.edges||[]).filter(visibleEdge);
-  const scene = renderScene(node,material);
+  const scene = memoryResult ? `<div class="memory-card" role="region" aria-label="${escapeHtml(data.materials[node.card].title)}" tabindex="0">${renderPaper(node.card)}</div>` : renderScene(node,material);
   const art = material?.art || node.art;
-  const composite = closing || (isComposite(art) && !node.photoPair) ? ' composite' : '';
+  const composite = !memoryResult && (closing || (isComposite(art) && !node.photoPair)) ? ' composite' : '';
   const recurring = ['critic','fatigue','boredom','loneliness','chief','tasya'].includes(art);
   const fixedDialogue = recurring && ['dialogue','dual','choice'].includes(node.kind) && !closing && !node.material && !node.photoPair && !node.paperPair
     && (node.series>1 || node.id==='с1-мост' || (node.series===1 && ['critic','fatigue','boredom','loneliness'].includes(art)));
@@ -3252,11 +3439,12 @@ function renderNode(){
   const introduction = episodeCover
     ? `<p class="episode-number">Серия ${node.series}</p><h1>${escapeHtml(node.ui_title)}</h1>${node.text!==node.ui_title ? `<p>${text}</p>` : ''}`
     : sceneTitle + kicker + context + reading;
-  app.innerHTML = `${renderTopbar()}<main class="screen"><div class="hero-card${art==='tasya'&&!fixedDialogue?' tasya-dialogue':''}${fixedDialogue?' fixed-dialogue':''}"><div class="scene${composite}${approach?' approach':''}">${scene}</div><div class="panel${pointer}${decision}${comparison}${episodeCover?' cover-panel':''}">${introduction}<div class="actions">${renderZooms(node)}${renderActions(edges)}</div></div></div></main>`;
+  app.innerHTML = `${renderTopbar()}<main class="screen"><div class="hero-card${memoryResult?' memory-result':''}${art==='tasya'&&!fixedDialogue?' tasya-dialogue':''}${fixedDialogue?' fixed-dialogue':''}"><div class="scene${composite}${approach?' approach':''}">${scene}</div><div class="panel${pointer}${decision}${comparison}${episodeCover?' cover-panel':''}">${introduction}<div class="actions">${renderZooms(node)}${renderActions(edges)}</div></div></div></main>`;
   bindCommonActions();
   bindEdgeActions(edges);
   bindZoomActions(node);
   bindMaterialButtons(app);
+  beginImageDelivery(edges.map(edge=>getNode(edge.to)));
 }
 function renderScene(node,material){
   if (node.kind==='archive') {
@@ -3269,9 +3457,9 @@ function renderScene(node,material){
   if (material && !material.art) return material.sketch ? renderSketch() : paperStage(renderPaper(node.material),material.title);
   const key = material?.art || node.art;
   const alt = material?.title || (node.doc === 'now' ? 'Нынешний конверт' : node.speaker || node.ui_title || 'Сцена');
-  if (node.id==='с3-закрыть') return `<figure class="artwork chief-medium"><img src="${escapeHtml(getSceneAsset(node))}" alt="${escapeHtml(alt)}"></figure>`;
+  if (node.id==='с3-закрыть') return `<figure class="artwork chief-medium">${imageMarkup(getSceneAsset(node),alt)}</figure>`;
   if (isComposite(key)) return renderArtwork(key,alt);
-  return `<img class="scene-img" src="${escapeHtml(getSceneAsset(node))}" alt="${escapeHtml(alt)}">`;
+  return imageMarkup(getSceneAsset(node),alt,'scene-img');
 }
 const quickZoom = {
   'с1-осмотр-ящика':['now_detail','Увеличить конверт'],
@@ -3314,7 +3502,7 @@ function bindZoomActions(node){
     if (quick) {
       const [art,title]=quick;
       const extra = node.id==='с1-фрагмент' ? '<p>Полный текст не раскрывается раньше времени: показан только видимый край записки.</p>' : '';
-      openPreview(title,`<img class="modal-img" src="${escapeHtml(assetSource(art))}" alt="${escapeHtml(title)}">${extra}`,button);
+      openPreview(title,`${imageMarkup(assetSource(art),title,'modal-img')}${extra}`,button);
       return;
     }
     const ids = node.details?.materials || [node.material,node.card,...(node.cards||[])].filter(Boolean);
@@ -3325,7 +3513,7 @@ function bindZoomActions(node){
   };
 }
 function focusScene(){
-  (app.querySelector('.reading') || app.querySelector('.paper-stage, [data-zoom], [data-edge]'))?.focus({preventScroll:true});
+  (app.querySelector('.memory-card') || app.querySelector('.reading') || app.querySelector('.paper-stage, [data-zoom], [data-edge]'))?.focus({preventScroll:true});
 }
 async function bootstrap(){
   try {
