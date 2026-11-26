@@ -361,6 +361,27 @@ button:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--wine); o
 @media (prefers-reduced-motion:reduce) {
   .approach .scene-img { animation:none }
 }
+/* Проба оформления диалога; не опубликована. */
+#app.dialogue-overlay-mode { position:relative; isolation:isolate }
+#app.dialogue-overlay-mode > .topbar { position:absolute; inset:10px 10px auto; z-index:5; background:none; border:0; padding:0; pointer-events:none }
+#app.dialogue-overlay-mode > .topbar .brand { display:none }
+#app.dialogue-overlay-mode > .topbar button { pointer-events:auto; background:rgba(38,25,22,.72); color:#fff1d9; border-color:rgba(255,241,217,.4); min-height:44px }
+#app.dialogue-overlay-mode > .screen { padding:0; height:100%; min-height:0 }
+.overlay-preview { position:relative; display:block; width:100%; height:100%; max-width:560px; min-height:0; overflow:hidden; border-radius:0; isolation:isolate }
+.overlay-preview .scene { position:absolute; inset:0; display:block; margin:0; padding:0; min-height:0; width:100%; height:100%; background:none }
+.overlay-preview .scene .scene-img { display:block; width:100%; height:100%; max-width:none; max-height:none; object-fit:cover; object-position:50% 35% }
+.overlay-preview .panel { position:absolute; z-index:2; left:10px; right:10px; bottom:10px; width:auto; min-height:0; max-height:min(calc(100% - 64px),max(43%,calc(var(--overlay-actions-height,44px) + 90px))); padding:12px; display:flex; flex-direction:column; gap:8px; border:1px solid rgba(255,239,208,.75); border-radius:12px; background:rgba(255,246,229,.91); color:#36251d; box-shadow:0 3px 18px rgba(22,12,10,.22) }
+.overlay-preview .panel::before { display:none }
+.overlay-preview .reading { flex:1 1 auto; min-height:0; block-size:auto; max-height:none; padding:0 3px 0 0; overflow:auto; font-size:17px; line-height:1.35; scrollbar-gutter:stable }
+.overlay-preview .reading p { font-size:inherit; line-height:inherit }
+.overlay-preview .speaker { font-size:13px }
+.overlay-preview .actions { flex:0 0 auto; gap:6px; margin:0 }
+.overlay-preview .actions button { min-height:44px; font-size:16px; padding:9px 12px }
+
+/* Dialogue text is 17px; standalone evidence/reward documents retain their own type. */
+.reading { font-size:17px; line-height:1.35 }
+
+.overlay-preview.past-portrait .scene .scene-img { object-position:50% 0% }
 </style>
 </head>
 <body>
@@ -3337,7 +3358,24 @@ function renderTopbar(inStory=true){
   const folder = escapeHtml(data.ui?.folderTitle || 'Папка дела');
   return `<header class="topbar">${inStory ? `<div class="brand">${escapeHtml(data.title)}</div>` : ''}<nav class="top-actions" aria-label="Навигация игры"><button class="ghost-btn" data-action="home">Главная</button>${hasFindings ? `<button class="ghost-btn" data-action="archive">${folder}</button>` : ''}</nav></header><div id="storage-warning" class="storage-warning" role="status" ${storageWarning?'tabindex="0"':'hidden'}>${escapeHtml(storageWarning)}</div>`;
 }
+let dialogueLayoutObserver=null;
+function setDialogueLayout(enabled){
+  dialogueLayoutObserver?.disconnect();
+  dialogueLayoutObserver=null;
+  app.classList.toggle('dialogue-overlay-mode',enabled);
+  if (!enabled) return;
+  const panel=app.querySelector('.overlay-preview .panel');
+  const actions=panel?.querySelector('.actions');
+  if (!panel || !actions) return;
+  const measure=()=>panel.style.setProperty('--overlay-actions-height',actions.getBoundingClientRect().height+'px');
+  measure();
+  if (typeof ResizeObserver==='function') {
+    dialogueLayoutObserver=new ResizeObserver(measure);
+    dialogueLayoutObserver.observe(actions);
+  }
+}
 function renderHome(){
+  setDialogueLayout(false);
   const cover = data.nodes[data.entry];
   const continuing = state.current && state.current !== data.entry;
   const label = continuing ? data.ui?.continueButton || 'Продолжить' : data.ui?.homeButton || cover.edges[0].label;
@@ -3402,6 +3440,7 @@ function renderPhotoPair(ids){
   }).join('')}</div>`;
 }
 function renderNode(){
+  setDialogueLayout(false);
   const node = resolveNode();
   applyNodeEntry(node);
   saveState();
@@ -3430,6 +3469,7 @@ function renderNode(){
   const art = material?.art || node.art;
   const composite = !memoryResult && (closing || (isComposite(art) && !node.photoPair)) ? ' composite' : '';
   const recurring = ['critic','fatigue','boredom','loneliness','chief','tasya'].includes(art);
+  const overlayDialogue = (recurring || art==='past') && ['dialogue','dual','choice'].includes(node.kind) && !closing && !node.material && !node.photoPair && !node.paperPair && !node.card && !node.cards && !isComposite(art);
   const fixedDialogue = recurring && ['dialogue','dual','choice'].includes(node.kind) && !closing && !node.material && !node.photoPair && !node.paperPair
     && (node.series>1 || node.id==='с1-мост' || (node.series===1 && ['critic','fatigue','boredom','loneliness'].includes(art)));
   const decision = node.id === 'с1-вступление-4' ? ' decision-panel' : '';
@@ -3439,11 +3479,12 @@ function renderNode(){
   const introduction = episodeCover
     ? `<p class="episode-number">Серия ${node.series}</p><h1>${escapeHtml(node.ui_title)}</h1>${node.text!==node.ui_title ? `<p>${text}</p>` : ''}`
     : sceneTitle + kicker + context + reading;
-  app.innerHTML = `${renderTopbar()}<main class="screen"><div class="hero-card${memoryResult?' memory-result':''}${art==='tasya'&&!fixedDialogue?' tasya-dialogue':''}${fixedDialogue?' fixed-dialogue':''}"><div class="scene${composite}${approach?' approach':''}">${scene}</div><div class="panel${pointer}${decision}${comparison}${episodeCover?' cover-panel':''}">${introduction}<div class="actions">${renderZooms(node)}${renderActions(edges)}</div></div></div></main>`;
+  app.innerHTML = `${renderTopbar()}<main class="screen"><div class="hero-card${overlayDialogue?' overlay-preview':''}${overlayDialogue&&art==='past'?' past-portrait':''}${memoryResult?' memory-result':''}${art==='tasya'&&!fixedDialogue?' tasya-dialogue':''}${fixedDialogue?' fixed-dialogue':''}"><div class="scene${composite}${approach?' approach':''}">${scene}</div><div class="panel${pointer}${decision}${comparison}${episodeCover?' cover-panel':''}">${introduction}<div class="actions">${renderZooms(node)}${renderActions(edges)}</div></div></div></main>`;
   bindCommonActions();
   bindEdgeActions(edges);
   bindZoomActions(node);
   bindMaterialButtons(app);
+  setDialogueLayout(overlayDialogue);
   beginImageDelivery(edges.map(edge=>getNode(edge.to)));
 }
 function renderScene(node,material){
