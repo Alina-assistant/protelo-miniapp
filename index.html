@@ -369,8 +369,8 @@ button:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--wine); o
 #app.dialogue-overlay-mode > .screen { padding:0; height:100%; min-height:0 }
 .overlay-preview { position:relative; display:block; width:100%; height:100%; max-width:560px; min-height:0; overflow:hidden; border-radius:0; isolation:isolate }
 .overlay-preview .scene { position:absolute; inset:0; display:block; margin:0; padding:0; min-height:0; width:100%; height:100%; background:none }
-.overlay-preview .scene .scene-img { display:block; width:100%; height:100%; max-width:none; max-height:none; object-fit:cover; object-position:50% 35% }
-.overlay-preview .panel { position:absolute; z-index:2; left:10px; right:10px; bottom:10px; width:auto; min-height:0; max-height:min(calc(100% - 64px),max(43%,calc(var(--overlay-actions-height,44px) + 90px))); padding:12px; display:flex; flex-direction:column; gap:8px; border:1px solid rgba(255,239,208,.75); border-radius:12px; background:rgba(255,246,229,.91); color:#36251d; box-shadow:0 3px 18px rgba(22,12,10,.22) }
+.overlay-preview .scene .scene-img { display:block; width:100%; height:100%; max-width:none; max-height:none; object-fit:contain; object-position:50% 35% }
+.overlay-preview .panel { position:absolute; z-index:2; left:10px; right:10px; bottom:10px; width:auto; min-height:0; max-height:min(calc(100% - 64px),max(43%,calc(var(--overlay-fixed-height,120px) + 76px))); padding:12px; display:flex; flex-direction:column; gap:8px; border:1px solid rgba(255,239,208,.75); border-radius:12px; background:rgba(255,246,229,.91); color:#36251d; box-shadow:0 3px 18px rgba(22,12,10,.22) }
 .overlay-preview .panel::before { display:none }
 .overlay-preview .reading { flex:1 1 auto; min-height:0; block-size:auto; max-height:none; padding:0 3px 0 0; overflow:auto; font-size:17px; line-height:1.35; scrollbar-gutter:stable }
 .overlay-preview .reading p { font-size:inherit; line-height:inherit }
@@ -382,6 +382,30 @@ button:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--wine); o
 .reading { font-size:17px; line-height:1.35 }
 
 .overlay-preview.past-portrait .scene .scene-img { object-position:50% 0% }
+/* Whole source frames, never a face-only crop. Evidence keeps its dedicated layout. */
+.overlay-preview .panel > :not(.reading) { flex-shrink:0 }
+.witness-scene .scene img { object-fit:contain; object-position:50% 50%; width:100%; height:100% }
+.actions button,.actions .external-btn { font-size:16px }
+.reading { min-height:24px }
+.hero-card:not(.overlay-preview):not(.memory-result):not(.witness-scene) .scene { min-height:0 }
+.hero-card.witness-scene { display:flex; flex-direction:column }
+.witness-scene .scene { flex:1 1 0; width:100%; min-height:100px }
+.witness-scene .panel { flex:0 1 auto }
+.witness-scene .reading { max-height:5lh }
+@media (max-height:620px) {
+  .topbar .brand { display:none }
+  .memory-result .paper-document { padding:10px; font-size:17px; line-height:1.35 }
+  .memory-result .paper-document h3 { font-size:20px }
+  .memory-result .actions { grid-template-columns:1fr 1fr }
+  .memory-result .actions > :nth-child(-n+2) { grid-column:1 / -1 }
+}
+@media (max-height:620px) {
+  .dense-route .panel { padding:8px }
+  .dense-route .actions { grid-template-columns:3fr 5fr; gap:4px }
+  .dense-route .actions button { font-size:15px }
+  .dense-route .actions > [data-edge="0"],.dense-route .actions > [data-edge="1"],.dense-route .actions > [data-edge="2"] { grid-column:1 / -1 }
+}
+.overlay-preview.protected-prop .scene .scene-img { height:var(--safe-artwork-height,100%); object-position:50% 0% }
 </style>
 </head>
 <body>
@@ -3358,6 +3382,13 @@ function renderTopbar(inStory=true){
   const folder = escapeHtml(data.ui?.folderTitle || 'Папка дела');
   return `<header class="topbar">${inStory ? `<div class="brand">${escapeHtml(data.title)}</div>` : ''}<nav class="top-actions" aria-label="Навигация игры"><button class="ghost-btn" data-action="home">Главная</button>${hasFindings ? `<button class="ghost-btn" data-action="archive">${folder}</button>` : ''}</nav></header><div id="storage-warning" class="storage-warning" role="status" ${storageWarning?'tabindex="0"':'hidden'}>${escapeHtml(storageWarning)}</div>`;
 }
+function scenePresentation(node,material=data.materials[node.material]){
+  if (isMemoryResult(node) || node.kind==='archive' || node.photoPair || node.paperPair || node.cards || node.card || (material&&!material.art)) return 'document';
+  const key=material?.art || node.art || 'chief';
+  if (['critic','fatigue','boredom','loneliness'].includes(key)) return 'witness';
+  if (['cover','tasya','past','chief','room','shelf','box'].includes(key)) return 'fullscreen';
+  return 'evidence';
+}
 let dialogueLayoutObserver=null;
 function setDialogueLayout(enabled){
   dialogueLayoutObserver?.disconnect();
@@ -3367,11 +3398,27 @@ function setDialogueLayout(enabled){
   const panel=app.querySelector('.overlay-preview .panel');
   const actions=panel?.querySelector('.actions');
   if (!panel || !actions) return;
-  const measure=()=>panel.style.setProperty('--overlay-actions-height',actions.getBoundingClientRect().height+'px');
+  const measure=()=>{
+    const style=getComputedStyle(panel), children=[...panel.children];
+    const reading=panel.querySelector('.reading');
+    const fixed=children.filter(child=>child!==reading).reduce((sum,child)=>{
+      const s=getComputedStyle(child);
+      return sum+child.getBoundingClientRect().height+parseFloat(s.marginTop||0)+parseFloat(s.marginBottom||0);
+    },0)+parseFloat(style.paddingTop)+parseFloat(style.paddingBottom)+Math.max(0,children.length-1)*parseFloat(style.rowGap||0);
+    panel.style.setProperty('--overlay-fixed-height',fixed+'px');
+    const protectedScene=app.querySelector('.protected-prop');
+    if (protectedScene) {
+      const bounds=protectedScene.getBoundingClientRect();
+      // The box and its number occupy the upper 72%; keep that above the dialogue.
+      const safeHeight=Math.min(bounds.height,Math.max(0,(panel.getBoundingClientRect().top-bounds.top-10)/0.72));
+      protectedScene.style.setProperty('--safe-artwork-height',safeHeight+'px');
+    }
+  };
   measure();
   if (typeof ResizeObserver==='function') {
     dialogueLayoutObserver=new ResizeObserver(measure);
     dialogueLayoutObserver.observe(actions);
+    dialogueLayoutObserver.observe(app.querySelector('.overlay-preview'));
   }
 }
 function renderHome(){
@@ -3379,8 +3426,9 @@ function renderHome(){
   const cover = data.nodes[data.entry];
   const continuing = state.current && state.current !== data.entry;
   const label = continuing ? data.ui?.continueButton || 'Продолжить' : data.ui?.homeButton || cover.edges[0].label;
-  app.innerHTML = `${renderTopbar(false)}<main class="screen"><div class="hero-card"><div class="scene">${imageMarkup(getSceneAsset(cover),'Обложка','scene-img')}</div><div class="panel cover-panel"><h1>${escapeHtml(data.title)}</h1><p>${escapeHtml(cover.text)}</p><div class="actions"><button class="main-btn" data-action="start">${escapeHtml(label)}</button><button class="text-btn" data-action="reset">Сбросить прогресс</button></div></div></div></main>`;
+  app.innerHTML = `${renderTopbar(false)}<main class="screen"><div class="hero-card overlay-preview"><div class="scene">${imageMarkup(getSceneAsset(cover),'Обложка','scene-img')}</div><div class="panel cover-panel"><h1>${escapeHtml(data.title)}</h1><p>${escapeHtml(cover.text)}</p><div class="actions"><button class="main-btn" data-action="start">${escapeHtml(label)}</button><button class="text-btn" data-action="reset">Сбросить прогресс</button></div></div></div></main>`;
   bindCommonActions();
+  setDialogueLayout(true);
   beginImageDelivery([getNode(continuing ? state.current : cover.edges[0].to)]);
 }
 function resolveNode(){
@@ -3469,7 +3517,10 @@ function renderNode(){
   const art = material?.art || node.art;
   const composite = !memoryResult && (closing || (isComposite(art) && !node.photoPair)) ? ' composite' : '';
   const recurring = ['critic','fatigue','boredom','loneliness','chief','tasya'].includes(art);
-  const overlayDialogue = (recurring || art==='past') && ['dialogue','dual','choice'].includes(node.kind) && !closing && !node.material && !node.photoPair && !node.paperPair && !node.card && !node.cards && !isComposite(art);
+  const denseRoute = node.kind==='route' && !!node.photoPair;
+  const actionMarkup = denseRoute ? renderActions(edges)+renderZooms(node) : renderZooms(node)+renderActions(edges);
+  const presentation = scenePresentation(node,material);
+  const overlayDialogue = presentation==='fullscreen';
   const fixedDialogue = recurring && ['dialogue','dual','choice'].includes(node.kind) && !closing && !node.material && !node.photoPair && !node.paperPair
     && (node.series>1 || node.id==='с1-мост' || (node.series===1 && ['critic','fatigue','boredom','loneliness'].includes(art)));
   const decision = node.id === 'с1-вступление-4' ? ' decision-panel' : '';
@@ -3479,7 +3530,7 @@ function renderNode(){
   const introduction = episodeCover
     ? `<p class="episode-number">Серия ${node.series}</p><h1>${escapeHtml(node.ui_title)}</h1>${node.text!==node.ui_title ? `<p>${text}</p>` : ''}`
     : sceneTitle + kicker + context + reading;
-  app.innerHTML = `${renderTopbar()}<main class="screen"><div class="hero-card${overlayDialogue?' overlay-preview':''}${overlayDialogue&&art==='past'?' past-portrait':''}${memoryResult?' memory-result':''}${art==='tasya'&&!fixedDialogue?' tasya-dialogue':''}${fixedDialogue?' fixed-dialogue':''}"><div class="scene${composite}${approach?' approach':''}">${scene}</div><div class="panel${pointer}${decision}${comparison}${episodeCover?' cover-panel':''}">${introduction}<div class="actions">${renderZooms(node)}${renderActions(edges)}</div></div></div></main>`;
+  app.innerHTML = `${renderTopbar()}<main class="screen"><div class="hero-card${overlayDialogue?' overlay-preview':''}${presentation==='witness'?' witness-scene':''}${denseRoute?' dense-route':''}${overlayDialogue&&art==='past'?' past-portrait':''}${overlayDialogue&&art==='box'?' protected-prop':''}${memoryResult?' memory-result':''}${art==='tasya'&&!fixedDialogue?' tasya-dialogue':''}${fixedDialogue?' fixed-dialogue':''}"><div class="scene${composite}${approach?' approach':''}">${scene}</div><div class="panel${pointer}${decision}${comparison}${episodeCover?' cover-panel':''}">${introduction}<div class="actions">${actionMarkup}</div></div></div></main>`;
   bindCommonActions();
   bindEdgeActions(edges);
   bindZoomActions(node);
@@ -3498,7 +3549,6 @@ function renderScene(node,material){
   if (material && !material.art) return material.sketch ? renderSketch() : paperStage(renderPaper(node.material),material.title);
   const key = material?.art || node.art;
   const alt = material?.title || (node.doc === 'now' ? 'Нынешний конверт' : node.speaker || node.ui_title || 'Сцена');
-  if (node.id==='с3-закрыть') return `<figure class="artwork chief-medium">${imageMarkup(getSceneAsset(node),alt)}</figure>`;
   if (isComposite(key)) return renderArtwork(key,alt);
   return imageMarkup(getSceneAsset(node),alt,'scene-img');
 }
