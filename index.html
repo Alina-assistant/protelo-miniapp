@@ -406,6 +406,12 @@ button:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--wine); o
   .dense-route .actions > [data-edge="0"],.dense-route .actions > [data-edge="1"],.dense-route .actions > [data-edge="2"] { grid-column:1 / -1 }
 }
 .overlay-preview.protected-prop .scene .scene-img { height:var(--safe-artwork-height,100%); object-position:50% 0% }
+/* Diagnostic reading pages only: no other scene uses this class. */
+.hero-card.diagnostic-fullpage .scene { display:none }
+.hero-card.diagnostic-fullpage .panel { top:64px; bottom:10px; left:10px; right:10px; height:auto; max-height:none }
+.hero-card.diagnostic-fullpage .reading { flex:1 1 auto; min-height:24px; max-height:none; block-size:auto }
+.hero-card.diagnostic-fullpage .actions { flex:0 0 auto }
+/* End diagnostic reading pages. */
 </style>
 </head>
 <body>
@@ -3530,7 +3536,7 @@ function renderNode(){
   const introduction = episodeCover
     ? `<p class="episode-number">Серия ${node.series}</p><h1>${escapeHtml(node.ui_title)}</h1>${node.text!==node.ui_title ? `<p>${text}</p>` : ''}`
     : sceneTitle + kicker + context + reading;
-  app.innerHTML = `${renderTopbar()}<main class="screen"><div class="hero-card${overlayDialogue?' overlay-preview':''}${presentation==='witness'?' witness-scene':''}${denseRoute?' dense-route':''}${overlayDialogue&&art==='past'?' past-portrait':''}${overlayDialogue&&art==='box'?' protected-prop':''}${memoryResult?' memory-result':''}${art==='tasya'&&!fixedDialogue?' tasya-dialogue':''}${fixedDialogue?' fixed-dialogue':''}"><div class="scene${composite}${approach?' approach':''}">${scene}</div><div class="panel${pointer}${decision}${comparison}${episodeCover?' cover-panel':''}">${introduction}<div class="actions">${actionMarkup}</div></div></div></main>`;
+  app.innerHTML = `${renderTopbar()}<main class="screen"><div class="hero-card${overlayDialogue?' overlay-preview':''}${['с3-диагностика-приглашение','с3-описание'].includes(node.id)?' diagnostic-fullpage':''}${presentation==='witness'?' witness-scene':''}${denseRoute?' dense-route':''}${overlayDialogue&&art==='past'?' past-portrait':''}${overlayDialogue&&art==='box'?' protected-prop':''}${memoryResult?' memory-result':''}${art==='tasya'&&!fixedDialogue?' tasya-dialogue':''}${fixedDialogue?' fixed-dialogue':''}"><div class="scene${composite}${approach?' approach':''}">${scene}</div><div class="panel${pointer}${decision}${comparison}${episodeCover?' cover-panel':''}">${introduction}<div class="actions">${actionMarkup}</div></div></div></main>`;
   bindCommonActions();
   bindEdgeActions(edges);
   bindZoomActions(node);
