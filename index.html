@@ -8,6 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>Дело о подменённом конверте</title>
 <script id="telegram-web-app-sdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
+<script src="Прогресс-аккаунта.js"></script>
 <style>
 :root {
   --bg:#e6dcc8;
@@ -3075,9 +3076,56 @@ let approachNext = false;
 let sheetMode = '', sheetTrigger = null, archivePreview = null, archiveScroll = 0;
 function defaultState(){ return { started:false, current:null, grants:[], vars:{}, visited:[], openedArchive:false }; }
 function warnStorage(message){ storageWarning=message; const el=document.getElementById('storage-warning'); if(el){el.textContent=message;el.hidden=!message;el.tabIndex=message?0:-1;} }
-function saveState(){ try{localStorage.setItem(storageKey,JSON.stringify(state));return true;}catch(e){warnStorage('Не удалось сохранить прогресс в браузере. Игра продолжится, но после закрытия изменения могут потеряться.');return false;} }
-function loadState(){
-  let raw;try{raw=localStorage.getItem(storageKey);}catch(e){warnStorage('Хранилище браузера недоступно. Прогресс сохраняется только до закрытия страницы.');return defaultState();}
+let accountStore = null, accountWarning = '', accountLocalUnavailable = false;
+function accountConfirm(message){return new Promise(resolve=>{
+  try{const tg=window.Telegram?.WebApp;if(typeof tg?.showConfirm==='function'){tg.showConfirm(message,ok=>resolve(ok===true));return;}}catch(e){}
+  resolve(confirm(message));
+});}
+function accountProblem(code){
+  if(code==='LOCAL_UNAVAILABLE')accountLocalUnavailable=true;
+  accountWarning=accountLocalUnavailable?'Не удалось сохранить прогресс. Не закрывай игру, пока сохранение не восстановится.':code==='CLOUD_CONFLICT'
+    ? 'Прогресс изменён на другом устройстве. Закрой и снова открой игру, чтобы выбрать актуальное сохранение.'
+    : 'Не удалось синхронизировать прогресс с Telegram. Изменения сохраняются только на этом устройстве.';
+  warnStorage(accountWarning);
+}
+function clearAccountWarning(){if(accountWarning&&storageWarning===accountWarning)warnStorage('');accountWarning='';}
+function saveState(){
+  let saved=true;
+  try{localStorage.setItem(storageKey,JSON.stringify(state));accountLocalUnavailable=false;}catch(e){accountLocalUnavailable=true;warnStorage('Не удалось сохранить прогресс в браузере. Игра продолжится, но после закрытия изменения могут потеряться.');saved=false;}
+  if(accountStore)accountStore.save(state).then(clearAccountWarning).catch(()=>{});
+  return saved;
+}
+async function initializeAccountProgress(){
+  const legacy=loadState();accountStore=null;
+  const webApp=await new Promise(resolve=>{
+    if(window.Telegram?.WebApp){resolve(window.Telegram.WebApp);return;}
+    const timer=setTimeout(()=>resolve(null),1500);
+    document.getElementById('telegram-web-app-sdk')?.addEventListener('load',()=>{clearTimeout(timer);resolve(window.Telegram?.WebApp||null);},{once:true});
+  });
+  const id=webApp?.initDataUnsafe?.user?.id;
+  if(!webApp?.initData||!Number.isSafeInteger(id)||id<=0){
+    if((webApp?.platform&&webApp.platform!=='unknown')||/tgWebApp(?:Platform|Data)=/.test(location.hash))accountProblem('CLOUD_CONTEXT_MISSING');
+    return legacy;
+  }
+  if(!window.ProTeloProgress?.create){accountProblem('CLOUD_UNAVAILABLE');return legacy;}
+  const baseKey=storageKey;storageKey=baseKey+':tg:'+id;
+  app.innerHTML='<div class="error"><div class="error-box" role="status">Загружаем сохранение…</div></div>';
+  accountStore=window.ProTeloProgress.create({
+    cloud:webApp.CloudStorage,local:{getItem:key=>window.localStorage.getItem(key),setItem:(key,value)=>window.localStorage.setItem(key,value)},key:baseKey,owner:String(id),empty:defaultState,
+    confirmImport:()=>accountConfirm('На этом устройстве есть сохранённая игра. Перенести её в твой аккаунт Telegram?'),
+    confirmConflict:()=>accountConfirm('На этом устройстве есть изменения, не сохранённые в Telegram. Продолжить с них? «Отмена» — открыть сохранение из Telegram.'),
+    onError:accountProblem
+  });
+  return loadState(JSON.stringify(await accountStore.open({legacy})));
+}
+document.addEventListener('visibilitychange',async()=>{
+  if(!document.hidden&&accountStore){
+    const fresh=await accountStore.refresh();
+    if(fresh){state=loadState(JSON.stringify(fresh));clearAccountWarning();render();}
+  }
+});
+function loadState(rawOverride){
+  let raw;try{raw=rawOverride===undefined?localStorage.getItem(storageKey):rawOverride;}catch(e){accountLocalUnavailable=true;warnStorage('Хранилище браузера недоступно. Прогресс сохраняется только до закрытия страницы.');return defaultState();}
   if(raw===null)return defaultState();
   let parsed;try{parsed=JSON.parse(raw);}catch(e){warnStorage('Сохранение повреждено. Начинается новая игра.');return defaultState();}
   if(!parsed||typeof parsed!=='object'||Array.isArray(parsed)){warnStorage('Сохранение повреждено. Начинается новая игра.');return defaultState();}
@@ -3116,7 +3164,7 @@ function loadState(){
   if(repaired)warnStorage('Часть сохранения повреждена. Допустимые находки и прогресс восстановлены.');
   return clean;
 }
-function resetState(){try{localStorage.removeItem(storageKey);storageWarning='';}catch(e){warnStorage('Не удалось удалить сохранение из браузера. Игра начнётся заново в этой вкладке, но старое сохранение может остаться.');}state=defaultState();render();}
+function resetState(){try{localStorage.removeItem(storageKey);storageWarning='';}catch(e){warnStorage('Не удалось удалить сохранение из браузера. Игра начнётся заново в этой вкладке, но старое сохранение может остаться.');}state=defaultState();if(accountStore)accountStore.reset().then(clearAccountWarning).catch(()=>{});render();}
 function escapeHtml(s){ return String(s||'').replace(/[&<>"]/g, ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch])); }
 function playerGreeting(opening='Привет', punctuation='!'){
   let name = data.ui?.demoPlayerName;
@@ -3575,7 +3623,7 @@ function renderActions(edges){
 }
 function bindCommonActions(){
   app.querySelectorAll('[data-action="start"]').forEach(btn=>btn.onclick=()=>{ startStory(); focusScene(); });
-  app.querySelectorAll('[data-action="reset"]').forEach(btn=>btn.onclick=()=>{ if(confirm('Сбросить локальный прогресс этого браузера?')) resetState(); });
+  app.querySelectorAll('[data-action="reset"]').forEach(btn=>btn.onclick=async()=>{ const approved=accountStore?await accountConfirm('Начать игру заново? Прогресс этого аккаунта Telegram будет сброшен.'):confirm('Сбросить локальный прогресс этого браузера?');if(approved)resetState(); });
   app.querySelectorAll('[data-action="archive"]').forEach(btn=>btn.onclick=()=>{ openArchive(btn); });
   app.querySelectorAll('[data-action="home"]').forEach(btn=>btn.onclick=()=>{ renderHome(); app.querySelector('[data-action="start"]').focus({preventScroll:true}); });
 }
@@ -3623,7 +3671,7 @@ async function bootstrap(){
     app.innerHTML = `<div class="error"><div class="error-box"><strong>Не удалось загрузить данные игры.</strong><br>Проверь, что index.html и data.json лежат в одной папке.</div><div>${escapeHtml(err.message)}</div></div>`;
     return;
   }
-  state=loadState();render();
+  state=await initializeAccountProgress();render();
 }
 function render(){ if (!state.current || state.current === data.entry) renderHome(); else renderNode(); }
 bootstrap();
