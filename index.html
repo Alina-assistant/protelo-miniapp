@@ -500,7 +500,7 @@ button:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--wine); o
       "edges": [
         {
           "label": "Взять дело",
-          "to": "с1-напоминания"
+          "to": "с1-места"
         },
         {
           "label": "Пока уйти",
@@ -513,15 +513,11 @@ button:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--wine); o
     "с1-напоминания": {
       "id": "с1-напоминания",
       "series": 1,
-      "kind": "dialogue",
-      "text": "Присылать напоминания вернуться к делу?",
+      "kind": "dispatch",
+      "text": "",
       "edges": [
         {
-          "label": "Да",
-          "to": "с1-места"
-        },
-        {
-          "label": "Буду заходить сама",
+          "label": "Продолжить",
           "to": "с1-места"
         }
       ],
@@ -534,7 +530,8 @@ button:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--wine); o
         "Буду заходить сама": {
           "reminder": false
         }
-      }
+      },
+      "hidden": true
     },
     "с1-места": {
       "id": "с1-места",
